@@ -39,28 +39,33 @@ logger = logging.getLogger(__name__)
 
 
 def _send_smtp_message(cfg: dict, from_addr: str, recipients: list[str], message: str | bytes, timeout: int = 30) -> None:
-    """Send through SMTP using the conventional TLS mode for the configured port.
+    """Send through SMTP using the correct TLS mode.
 
-    Account settings only store host/port today. Port 465 is implicit TLS
-    (SMTP_SSL); port 587 is plain SMTP upgraded with STARTTLS. Using SSL
-    directly against 587 raises the classic "[SSL: WRONG_VERSION_NUMBER]"
-    error even when credentials are correct.
+    Decision order:
+      1. Explicit smtp_starttls=True in cfg → always STARTTLS regardless of port.
+      2. Port 465 → implicit SSL (SMTP_SSL). RFC 8314 / conventional.
+      3. Anything else (25, 587, 2587, custom) → plain + STARTTLS upgrade.
+
+    This covers the common "[SSL: WRONG_VERSION_NUMBER]" failure which occurs
+    when SMTP_SSL is used against a STARTTLS port (e.g. 587 or a non-standard
+    port on a provider that only advertises STARTTLS).
     """
     host = cfg["smtp_host"]
     port = int(cfg.get("smtp_port") or 465)
     user = cfg.get("smtp_user") or ""
     password = cfg.get("smtp_password") or ""
-    if port == 587:
+    use_starttls = cfg.get("smtp_starttls") or port != 465
+    if use_starttls:
         with smtplib.SMTP(host, port, timeout=timeout) as smtp:
             smtp.starttls()
             if user and password:
                 smtp.login(user, password)
             smtp.sendmail(from_addr, recipients, message)
-        return
-    with smtplib.SMTP_SSL(host, port, timeout=timeout) as smtp:
-        if user and password:
-            smtp.login(user, password)
-        smtp.sendmail(from_addr, recipients, message)
+    else:
+        with smtplib.SMTP_SSL(host, port, timeout=timeout) as smtp:
+            if user and password:
+                smtp.login(user, password)
+            smtp.sendmail(from_addr, recipients, message)
 
 
 def _strip_think(text: str) -> str:
@@ -516,6 +521,7 @@ def _get_email_config(account_id: str | None = None, owner: str = "") -> dict:
                     "smtp_port": int(row.smtp_port or 465),
                     "smtp_user": row.smtp_user or "",
                     "smtp_password": _decrypt(row.smtp_password or ""),
+                    "smtp_starttls": bool(getattr(row, "smtp_starttls", False)),
                     "imap_host": row.imap_host or "",
                     "imap_port": int(row.imap_port or 993),
                     "imap_user": row.imap_user or "",
@@ -542,6 +548,7 @@ def _get_email_config(account_id: str | None = None, owner: str = "") -> dict:
         "smtp_port": int(settings.get("smtp_port", os.environ.get("SMTP_PORT", "465")) or 465),
         "smtp_user": settings.get("smtp_user", os.environ.get("SMTP_USER", "")),
         "smtp_password": settings.get("smtp_password", os.environ.get("SMTP_PASSWORD", "")),
+        "smtp_starttls": settings.get("smtp_starttls", os.environ.get("SMTP_STARTTLS", "").lower() == "true"),
         "imap_host": settings.get("imap_host", os.environ.get("IMAP_HOST", "")),
         "imap_port": int(settings.get("imap_port", os.environ.get("IMAP_PORT", "993")) or 993),
         "imap_user": settings.get("imap_user", os.environ.get("IMAP_USER", "")),

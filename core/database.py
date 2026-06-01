@@ -300,6 +300,7 @@ class EmailAccount(TimestampMixin, Base):
     smtp_port      = Column(Integer, default=465)
     smtp_user      = Column(String, default="")
     smtp_password  = Column(String, default="")
+    smtp_starttls  = Column(Boolean, default=False)
 
     from_address   = Column(String, default="")
 
@@ -1483,6 +1484,22 @@ def _migrate_seed_email_account():
         logging.getLogger(__name__).warning(f"seed email account migration: {e}")
 
 
+def _migrate_add_smtp_starttls_column():
+    """Add smtp_starttls to email_accounts if missing. Default False (port-based logic
+    handles 587 automatically; explicit flag needed only for non-standard ports)."""
+    import sqlite3
+    try:
+        conn = sqlite3.connect(DATABASE_URL.replace("sqlite:///", ""))
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(email_accounts)").fetchall()]
+        if columns and "smtp_starttls" not in columns:
+            conn.execute("ALTER TABLE email_accounts ADD COLUMN smtp_starttls BOOLEAN DEFAULT 0")
+            conn.commit()
+            logging.getLogger(__name__).info("Migrated: added 'smtp_starttls' column to email_accounts")
+        conn.close()
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"smtp_starttls migration failed: {e}")
+
+
 def init_db():
     """
     Initialize the database by creating all tables.
@@ -1523,6 +1540,7 @@ def init_db():
     _migrate_encrypt_email_passwords()
     _migrate_encrypt_signatures()
     _migrate_encrypt_endpoint_keys()
+    _migrate_add_smtp_starttls_column()
 
 
 def _migrate_encrypt_endpoint_keys():
