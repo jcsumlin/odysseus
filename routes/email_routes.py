@@ -2699,6 +2699,7 @@ def setup_email_routes():
                 db.add(row)
             field_map = {
                 "smtp_host": "smtp_host", "smtp_port": "smtp_port", "smtp_user": "smtp_user",
+                "smtp_starttls": "smtp_starttls",
                 "imap_host": "imap_host", "imap_port": "imap_port", "imap_user": "imap_user",
                 "imap_starttls": "imap_starttls", "email_from": "from_address",
             }
@@ -2782,6 +2783,7 @@ def setup_email_routes():
                     "smtp_host": r.smtp_host or "",
                     "smtp_port": int(r.smtp_port or 465),
                     "smtp_user": r.smtp_user or "",
+                    "smtp_starttls": bool(getattr(r, "smtp_starttls", False)),
                     "from_address": r.from_address or "",
                     "has_imap_password": bool(r.imap_password),
                     "has_smtp_password": bool(r.smtp_password),
@@ -2814,6 +2816,7 @@ def setup_email_routes():
                 smtp_host=(data.get("smtp_host") or "").strip(),
                 smtp_port=int(data.get("smtp_port") or 465),
                 smtp_user=(data.get("smtp_user") or "").strip(),
+                smtp_starttls=bool(data.get("smtp_starttls", False)),
                 smtp_password=_enc(data.get("smtp_password") or ""),
                 from_address=(data.get("from_address") or "").strip(),
                 # SECURITY: stamp the creator so all subsequent reads / mutations
@@ -2856,7 +2859,7 @@ def setup_email_routes():
             for key in ("imap_port", "smtp_port"):
                 if data.get(key) not in (None, ""):
                     setattr(row, key, int(data[key]))
-            for key in ("imap_starttls", "enabled"):
+            for key in ("imap_starttls", "smtp_starttls", "enabled"):
                 if key in data:
                     setattr(row, key, bool(data[key]))
             # Passwords — only overwrite when a non-empty value is
@@ -2942,6 +2945,7 @@ def setup_email_routes():
                     "smtp_port": row.smtp_port or 465,
                     "smtp_user": row.smtp_user or "",
                     "smtp_password": _decrypt(row.smtp_password or ""),
+                    "smtp_starttls": bool(getattr(row, "smtp_starttls", False)),
                 }
                 for key, value in body.items():
                     if key == "account_id":
@@ -2993,8 +2997,9 @@ def setup_email_routes():
             smtp_port = int(body.get("smtp_port") or 465)
             smtp_user = (body.get("smtp_user") or imap_user).strip()
             smtp_pass = body.get("smtp_password") or imap_pass
+            smtp_starttls = bool(body.get("smtp_starttls")) or smtp_port == 587
             try:
-                if smtp_port == 587:
+                if smtp_starttls:
                     smtp = smtplib.SMTP(smtp_host, smtp_port, timeout=10)
                     smtp.starttls()
                 else:

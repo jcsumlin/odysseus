@@ -41,20 +41,21 @@ logger = logging.getLogger(__name__)
 def _send_smtp_message(cfg: dict, from_addr: str, recipients: list[str], message: str | bytes, timeout: int = 30) -> None:
     """Send through SMTP using the correct TLS mode.
 
-    Decision order:
-      1. Explicit smtp_starttls=True in cfg → always STARTTLS regardless of port.
-      2. Port 465 → implicit SSL (SMTP_SSL). RFC 8314 / conventional.
-      3. Anything else (25, 587, 2587, custom) → plain + STARTTLS upgrade.
+    Decision order (first match wins):
+      1. smtp_starttls=True in cfg  → STARTTLS (explicit override).
+      2. Port 587                   → STARTTLS (de-facto standard, preserved).
+      3. Everything else            → implicit SSL via SMTP_SSL.
 
-    This covers the common "[SSL: WRONG_VERSION_NUMBER]" failure which occurs
-    when SMTP_SSL is used against a STARTTLS port (e.g. 587 or a non-standard
-    port on a provider that only advertises STARTTLS).
+    Port 465 → implicit SSL without the checkbox.
+    Custom/non-standard ports follow the checkbox; if unset they fall through
+    to implicit SSL, which keeps plain-SMTP local servers working when users
+    deliberately leave the checkbox off.
     """
     host = cfg["smtp_host"]
     port = int(cfg.get("smtp_port") or 465)
     user = cfg.get("smtp_user") or ""
     password = cfg.get("smtp_password") or ""
-    use_starttls = cfg.get("smtp_starttls") or port != 465
+    use_starttls = bool(cfg.get("smtp_starttls")) or port == 587
     if use_starttls:
         with smtplib.SMTP(host, port, timeout=timeout) as smtp:
             smtp.starttls()
