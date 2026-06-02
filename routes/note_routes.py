@@ -17,6 +17,46 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Webhook reminder channel helpers
+# ---------------------------------------------------------------------------
+
+def _parse_json_obj(raw: Any, fallback: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse a JSON-object string into a dict, falling back on any error.
+
+    Used for the user-supplied `reminder_webhook_headers` setting, which is a
+    free-text JSON object. A malformed value should degrade to the default
+    rather than break reminder delivery.
+    """
+    if isinstance(raw, dict):
+        return raw
+    if not raw or not str(raw).strip():
+        return dict(fallback)
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else dict(fallback)
+    except (ValueError, TypeError):
+        return dict(fallback)
+
+
+def render_webhook_template(template: str, mapping: Dict[str, str], json_escape: bool) -> str:
+    """Substitute {{title}}/{{message}}/{{note_id}} placeholders in a webhook body.
+
+    When `json_escape` is True (the body is a JSON payload), each value is
+    JSON-string-escaped — `json.dumps(v)[1:-1]` yields the escaped inner string
+    without the surrounding quotes — so a message containing quotes or newlines
+    can't break the surrounding JSON template. When False, values are inserted
+    raw (e.g. a plain-text body).
+    """
+    out = template or ""
+    for key, value in mapping.items():
+        val = "" if value is None else str(value)
+        if json_escape:
+            val = json.dumps(val)[1:-1]
+        out = out.replace("{{" + key + "}}", val)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Request models
 # ---------------------------------------------------------------------------
 
@@ -115,7 +155,7 @@ async def dispatch_reminder(
     owner: str = "",
     queue_browser: bool = True,
 ) -> dict:
-    """Fire a reminder via the configured channel (browser/email/ntfy).
+    """Fire a reminder via the configured channel (browser/email/ntfy/webhook).
 
     Args:
         title: short headline shown to the user
@@ -124,7 +164,7 @@ async def dispatch_reminder(
         owner: the user this reminder belongs to — scopes SMTP config to
                their account so we don't cross-leak credentials
 
-    Returns: {synthesis, email_sent, ntfy_sent}. Browser channel is wired via
+    Returns: {synthesis, email_sent, ntfy_sent, webhook_sent}. Browser channel is wired via
     the in-memory notification queue picked up by the frontend poller, so
     nothing is "sent" synchronously for it — the channel just routes there.
     """
@@ -160,13 +200,14 @@ async def dispatch_reminder(
                 # Treat those as browser-only dedupe so email reminders can be
                 # retried by the backend scanner after a failed frontend path.
                 should_skip = last_dt >= _dt.now(_tz.utc) - _td(minutes=25)
-                if should_skip and channel in ("email", "ntfy"):
+                if should_skip and channel in ("email", "ntfy", "webhook"):
                     should_skip = last_channel == channel
                 if should_skip:
                     return {
                         "synthesis": None,
                         "email_sent": False,
                         "ntfy_sent": False,
+                        "webhook_sent": False,
                         "browser_sent": True,
                         "skipped": True,
                     }
@@ -390,6 +431,46 @@ async def dispatch_reminder(
             ntfy_error = str(e) or e.__class__.__name__
             logger.warning(f"Reminder ntfy send failed: {e}")
 
+    webhook_sent = False
+    webhook_error = ""
+    if channel == "webhook":
+        try:
+            import httpx
+            url = (settings.get("reminder_webhook_url") or "").strip()
+            if not url:
+                webhook_error = "No webhook URL configured"
+            else:
+                from src.url_safety import check_outbound_url
+                # block_private=False (default): allow loopback/LAN targets — same
+                # local-first posture as the ntfy channel — while still rejecting
+                # the link-local/metadata SSRF vector.
+                ok, reason = check_outbound_url(url)
+                if not ok:
+                    webhook_error = reason
+                else:
+                    method = (settings.get("reminder_webhook_method") or "POST").upper()
+                    headers = _parse_json_obj(
+                        settings.get("reminder_webhook_headers"),
+                        {"Content-Type": "application/json"},
+                    )
+                    tmpl = settings.get("reminder_webhook_body") or '{"title":"{{title}}","message":"{{message}}"}'
+                    msg = synthesis or note_body or title
+                    content_type = headers.get("Content-Type") or headers.get("content-type") or ""
+                    is_json = "json" in content_type.lower()
+                    body = render_webhook_template(
+                        tmpl,
+                        {"title": title, "message": msg, "note_id": str(note_id or "")},
+                        is_json,
+                    )
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        resp = await client.request(method, url, content=body, headers=headers)
+                        webhook_sent = resp.is_success
+                        if not webhook_sent:
+                            webhook_error = f"webhook returned HTTP {resp.status_code}"
+        except Exception as e:
+            webhook_error = str(e) or e.__class__.__name__
+            logger.warning(f"Reminder webhook send failed: {e}")
+
     # In-app browser notification ALWAYS fires (regardless of channel). The
     # frontend polls `/api/tasks/notifications` and turns any entry with a
     # `body` into a real `Notification(...)` — same surface as task-success
@@ -415,7 +496,7 @@ async def dispatch_reminder(
     # second send for the same note within 25 min. Without this, a note
     # whose due_date fires while the user has the app open got TWO emails
     # (frontend-fired here + background-fired by ping_notes 0–5 min later).
-    if (email_sent or ntfy_sent or browser_sent or local_browser_sent) and note_id:
+    if (email_sent or ntfy_sent or webhook_sent or browser_sent or local_browser_sent) and note_id:
         try:
             import json as _json
             from datetime import datetime as _dt, timezone as _tz
@@ -431,7 +512,7 @@ async def dispatch_reminder(
                 _cache = cache or (_json.loads(_STATE.read_text(encoding="utf-8")) if _STATE.exists() else {})
             except Exception:
                 _cache = {}
-            sent_channel = "email" if email_sent else "ntfy" if ntfy_sent else "browser"
+            sent_channel = "email" if email_sent else "ntfy" if ntfy_sent else "webhook" if webhook_sent else "browser"
             _cache[cache_key or str(note_id)] = {
                 "at": _dt.now(_tz.utc).isoformat(),
                 "channel": sent_channel,
@@ -446,6 +527,8 @@ async def dispatch_reminder(
         "email_error": email_error,
         "ntfy_sent": ntfy_sent,
         "ntfy_error": ntfy_error,
+        "webhook_sent": webhook_sent,
+        "webhook_error": webhook_error,
         "browser_sent": browser_sent or local_browser_sent,
     }
 

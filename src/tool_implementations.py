@@ -1565,6 +1565,7 @@ async def do_manage_settings(content: str, owner: Optional[str] = None) -> Dict:
             "image gen": "image_gen_enabled", "image generation": "image_gen_enabled",
             "reminder channel": "reminder_channel", "reminders": "reminder_channel",
             "ntfy topic": "reminder_ntfy_topic",
+            "webhook url": "reminder_webhook_url", "webhook body": "reminder_webhook_body",
             "agent tool calls": "agent_max_tool_calls", "max tool calls": "agent_max_tool_calls",
             "agent timeout": "agent_stream_timeout_seconds", "stream timeout": "agent_stream_timeout_seconds",
             "token budget": "agent_input_token_budget", "input budget": "agent_input_token_budget",
@@ -1580,7 +1581,7 @@ async def do_manage_settings(content: str, owner: Optional[str] = None) -> Dict:
 
         _ENUMS = {
             "image_quality": ["low", "medium", "high"],
-            "reminder_channel": ["browser", "email", "ntfy"],
+            "reminder_channel": ["browser", "email", "ntfy", "webhook"],
         }
         def _coerce(value, default):
             if isinstance(default, bool):
