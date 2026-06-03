@@ -135,10 +135,17 @@ DEFAULT_SETTINGS = {
     # library can grow beyond this; cleanup/retirement is an explicit review flow.
     "skill_max_injected": 3,
     # Reminders
-    "reminder_channel": "browser",   # "browser" | "email" | "ntfy"
+    "reminder_channel": "browser",   # "browser" | "email" | "ntfy" | "webhook"
     "reminder_llm_synthesis": False,
     "reminder_ntfy_topic": "Reminders",
     "reminder_email_to": "",
+    # Generic outbound webhook channel. The URL may embed a secret (e.g. a
+    # Telegram bot token), so the Settings UI renders it as a sensitive field.
+    # Body is a template with {{title}}/{{message}}/{{note_id}} placeholders.
+    "reminder_webhook_url": "",
+    "reminder_webhook_method": "POST",   # GET | POST | PUT
+    "reminder_webhook_body": '{"title":"{{title}}","message":"{{message}}"}',
+    "reminder_webhook_headers": '{"Content-Type":"application/json"}',
     # Email triage scanner rules. Running/paused state and schedule live in
     # Tasks via the built-in `check_email_urgency` task.
     "urgent_email_prompt": (

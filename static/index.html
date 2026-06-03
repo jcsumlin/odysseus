@@ -1924,6 +1924,7 @@
                   <option value="browser">Browser notification (default)</option>
                   <option value="email" id="set-reminder-channel-email-opt">Email</option>
                   <option value="ntfy" id="set-reminder-channel-ntfy-opt">ntfy</option>
+                  <option value="webhook" id="set-reminder-channel-webhook-opt">Webhook</option>
                 </select>
               </div>
               <div id="set-reminder-email-from-row" class="settings-row" style="display:none">
@@ -1938,6 +1939,27 @@
                 <label class="settings-label">ntfy topic</label>
                 <input id="set-reminder-ntfy-topic" class="settings-select" type="text" placeholder="reminders" />
               </div>
+              <div id="set-reminder-webhook-url-row" class="settings-row" style="display:none">
+                <label class="settings-label">Webhook URL</label>
+                <input id="set-reminder-webhook-url" class="settings-select" type="password" autocomplete="off" placeholder="https://api.telegram.org/bot&lt;token&gt;/sendMessage" />
+              </div>
+              <div id="set-reminder-webhook-method-row" class="settings-row" style="display:none">
+                <label class="settings-label">Method</label>
+                <select id="set-reminder-webhook-method" class="settings-select">
+                  <option value="POST">POST</option>
+                  <option value="PUT">PUT</option>
+                  <option value="GET">GET</option>
+                </select>
+              </div>
+              <div id="set-reminder-webhook-body-row" class="settings-row" style="display:none;align-items:flex-start">
+                <label class="settings-label">Body template</label>
+                <textarea id="set-reminder-webhook-body" class="settings-select" rows="3" style="font-family:monospace;resize:vertical" placeholder='{"chat_id":"123456","text":"{{message}}"}'></textarea>
+              </div>
+              <div id="set-reminder-webhook-headers-row" class="settings-row" style="display:none;align-items:flex-start">
+                <label class="settings-label">Headers</label>
+                <textarea id="set-reminder-webhook-headers" class="settings-select" rows="2" style="font-family:monospace;resize:vertical" placeholder='{"Content-Type":"application/json"}'></textarea>
+              </div>
+              <div id="set-reminder-webhook-hint" style="font-size:11px;opacity:0.6;display:none">Placeholders: <code>{{title}}</code>, <code>{{message}}</code>, <code>{{note_id}}</code>. Works with any service — e.g. a Telegram bot's <code>sendMessage</code> endpoint.</div>
               <div id="set-reminder-channel-hint" style="font-size:11px;opacity:0.6;"></div>
               <div style="font-size:11px;opacity:0.6;margin-top:4px;">Configure email account, ntfy server, etc. in <a href="#" id="set-reminders-open-integrations" style="color:var(--accent, var(--red));text-decoration:none;font-weight:600;">Integrations</a>.</div>
             </div>

@@ -2288,6 +2288,17 @@ async function initReminderSettings() {
   const emailToIn = el('set-reminder-email-to');
   const ntfyTopicRow = el('set-reminder-ntfy-topic-row');
   const ntfyTopicIn = el('set-reminder-ntfy-topic');
+  const webhookRows = [
+    el('set-reminder-webhook-url-row'),
+    el('set-reminder-webhook-method-row'),
+    el('set-reminder-webhook-body-row'),
+    el('set-reminder-webhook-headers-row'),
+    el('set-reminder-webhook-hint'),
+  ];
+  const webhookUrlIn = el('set-reminder-webhook-url');
+  const webhookMethodSel = el('set-reminder-webhook-method');
+  const webhookBodyIn = el('set-reminder-webhook-body');
+  const webhookHeadersIn = el('set-reminder-webhook-headers');
 
   function populateReminderEmailAccounts(selectedId = '') {
     if (!emailAcctSel) return;
@@ -2356,6 +2367,10 @@ async function initReminderSettings() {
     if (emailFromRow) emailFromRow.style.display = (isEmail && emailAccounts.length > 1) ? 'flex' : 'none';
     if (emailToRow) emailToRow.style.display = isEmail ? 'flex' : 'none';
     if (ntfyTopicRow) ntfyTopicRow.style.display = channelSel.value === 'ntfy' ? 'flex' : 'none';
+    const isWebhook = channelSel.value === 'webhook';
+    webhookRows.forEach((row) => {
+      if (row) row.style.display = isWebhook ? (row.id === 'set-reminder-webhook-hint' ? 'block' : 'flex') : 'none';
+    });
   }
 
   // Browser notifications fire on EVERY reminder (see
@@ -2366,6 +2381,7 @@ async function initReminderSettings() {
     browser: 'Reminders appear as browser notifications inside Odysseus.',
     email: 'Reminders are emailed AND shown as a browser notification.',
     ntfy: 'Reminders are pushed via ntfy AND shown as a browser notification.',
+    webhook: 'Reminders are sent to your webhook AND shown as a browser notification.',
   };
 
   applyReminderChannelAvailability();
@@ -2386,6 +2402,10 @@ async function initReminderSettings() {
     llmToggle.checked = !!s.reminder_llm_synthesis;
     if (emailToIn) emailToIn.value = s.reminder_email_to || '';
     if (ntfyTopicIn) ntfyTopicIn.value = s.reminder_ntfy_topic || 'Reminders';
+    if (webhookUrlIn) webhookUrlIn.value = s.reminder_webhook_url || '';
+    if (webhookMethodSel) webhookMethodSel.value = s.reminder_webhook_method || 'POST';
+    if (webhookBodyIn) webhookBodyIn.value = s.reminder_webhook_body || '{"title":"{{title}}","message":"{{message}}"}';
+    if (webhookHeadersIn) webhookHeadersIn.value = s.reminder_webhook_headers || '{"Content-Type":"application/json"}';
     // Restore the previously-picked email account (if any), otherwise
     // default to the account flagged is_default in the integrations
     // list. Falls through to the first option if neither exists.
@@ -2435,6 +2455,30 @@ async function initReminderSettings() {
       topicDebounce = setTimeout(() => save({ reminder_ntfy_topic: ntfyTopicIn.value.trim() || 'reminders' }), 600);
     });
   }
+  if (webhookUrlIn) {
+    let whUrlDebounce;
+    webhookUrlIn.addEventListener('input', () => {
+      clearTimeout(whUrlDebounce);
+      whUrlDebounce = setTimeout(() => save({ reminder_webhook_url: webhookUrlIn.value.trim() }), 600);
+    });
+  }
+  if (webhookMethodSel) {
+    webhookMethodSel.addEventListener('change', () => save({ reminder_webhook_method: webhookMethodSel.value }));
+  }
+  if (webhookBodyIn) {
+    let whBodyDebounce;
+    webhookBodyIn.addEventListener('input', () => {
+      clearTimeout(whBodyDebounce);
+      whBodyDebounce = setTimeout(() => save({ reminder_webhook_body: webhookBodyIn.value }), 600);
+    });
+  }
+  if (webhookHeadersIn) {
+    let whHeadersDebounce;
+    webhookHeadersIn.addEventListener('input', () => {
+      clearTimeout(whHeadersDebounce);
+      whHeadersDebounce = setTimeout(() => save({ reminder_webhook_headers: webhookHeadersIn.value }), 600);
+    });
+  }
   // Dim the whole AI Synthesis card when off (matches Vision/Utility/etc.).
   function syncSynthesisDim() {
     const card = llmToggle.closest('.admin-card');
@@ -2481,10 +2525,14 @@ async function initReminderSettings() {
         if (channelSel.value === 'ntfy' && !data.ntfy_sent) {
           throw new Error(data.ntfy_error || 'ntfy reminder was not sent');
         }
+        if (channelSel.value === 'webhook' && !data.webhook_sent) {
+          throw new Error(data.webhook_error || 'Webhook reminder was not sent');
+        }
         let status = 'Delivered via ' + channelSel.value;
         if (data.synthesis) status += ' (AI: "' + data.synthesis.slice(0, 60) + '...")';
         if (data.email_sent) status += ' — email sent';
         if (data.ntfy_sent) status += ' — ntfy sent';
+        if (data.webhook_sent) status += ' — webhook sent';
         if (testMsg) { testMsg.textContent = status; testMsg.style.color = 'var(--green, #50fa7b)'; }
         // Also fire a browser notification so user can see it
         if ('Notification' in window && Notification.permission === 'granted') {
