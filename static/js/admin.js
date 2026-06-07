@@ -417,6 +417,9 @@ async function loadEndpoints() {
       const justAddedClass = (_recentlyAddedEpId && String(ep.id) === _recentlyAddedEpId) ? ' adm-ep-just-added' : '';
       const category = ep.category || (_isLocalEndpoint(ep.base_url) ? 'local' : 'api');
       const kindLabel = ep.endpoint_kind && ep.endpoint_kind !== 'auto' ? ep.endpoint_kind.toUpperCase() : '';
+      const keyLabel = ep.has_key
+        ? (ep.api_key_fingerprint ? ` (key ${esc(ep.api_key_fingerprint)})` : ' (key set)')
+        : '';
       return `
         <div class="admin-user-row${ep.is_enabled ? '' : ' admin-ep-disabled'}${justAddedClass}" data-adm-ep-id="${ep.id}">
           <div style="display:flex;align-items:center;justify-content:space-between;${hasModels ? 'cursor:pointer;' : ''}padding:4px 0;" data-adm-ep-header="${ep.id}">
@@ -434,7 +437,7 @@ async function loadEndpoints() {
               ${hasModels ? '<svg class="admin-user-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3;transition:transform 0.2s,opacity 0.2s;"><polyline points="6 9 12 15 18 9"/></svg>' : ''}
             </div>
           </div>
-          <div class="admin-ep-detail">${esc(ep.base_url)}${category === 'local' ? `<button type="button" class="admin-ep-copy-btn" data-adm-copy-url="${esc(ep.base_url)}" title="Copy URL" aria-label="Copy URL" style="background:none;border:none;padding:0 2px;margin-left:6px;cursor:pointer;color:inherit;opacity:0.45;vertical-align:-2px;line-height:1;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>` : ''}${ep.has_key ? ' (key set)' : ''}</div>
+          <div class="admin-ep-detail">${esc(ep.base_url)}${category === 'local' ? `<button type="button" class="admin-ep-copy-btn" data-adm-copy-url="${esc(ep.base_url)}" title="Copy URL" aria-label="Copy URL" style="background:none;border:none;padding:0 2px;margin-left:6px;cursor:pointer;color:inherit;opacity:0.45;vertical-align:-2px;line-height:1;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>` : ''}${keyLabel}</div>
           ${hasModels ? `<div class="mcp-tools-panel hidden" data-adm-ep-models-panel="${ep.id}"></div>` : ''}
         </div>`;
     });
@@ -770,7 +773,7 @@ function initEndpointForm() {
       }
     } catch(e) {}
     // Ensure /v1 suffix for bare host:port URLs (not cloud providers)
-    if (!u.includes('api.') && !u.includes('openrouter') && !u.includes('ollama.com') && !u.endsWith('/v1')) {
+    if (!u.includes('api.') && !u.includes('openrouter') && !u.includes('opencode.ai') && !u.includes('ollama.com') && !u.endsWith('/v1')) {
       try {
         const parsed = new URL(u);
         if (!parsed.pathname || parsed.pathname === '/') {
@@ -2117,14 +2120,22 @@ function initBackup() {
     const btn = el('adm-importDataBtn');
     btn.disabled = true; btn.textContent = 'Importing...'; msg.textContent = '';
     try {
-      const text = await file.text();
-      const data = JSON.parse(text);
+      const text = (await file.text()).replace(/^\uFEFF/, '').trim();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        throw new Error('Invalid backup file: ' + e.message);
+      }
       const res = await fetch('/api/import', {
         method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
       });
-      const result = await res.json();
+      const result = await res.json().catch(() => null);
+      if (!result) {
+        throw new Error(`Import failed: server returned ${res.status}`);
+      }
       if (res.ok && result.ok) {
         msg.textContent = result.message || 'Import successful.'; msg.className = 'admin-success';
       } else {

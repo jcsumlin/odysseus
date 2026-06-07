@@ -135,6 +135,32 @@ def _note_to_dict(note: Note) -> Dict[str, Any]:
     }
 
 
+def _reminder_text_from_note(note: Note) -> tuple[str, str]:
+    """Return the reminder title/body from a stored note row."""
+    title = (note.title or "Note reminder").strip() or "Note reminder"
+    if note.items:
+        try:
+            items = json.loads(note.items)
+        except (json.JSONDecodeError, TypeError):
+            items = None
+        if isinstance(items, list):
+            pending: list[str] = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("done") or item.get("checked"):
+                    continue
+                text = str(item.get("text") or "").strip()
+                if text:
+                    pending.append(text)
+            if pending:
+                shown = "\n".join(f"- {text}" for text in pending[:8])
+                extra = f"\n...and {len(pending) - 8} more" if len(pending) > 8 else ""
+                return title, f"Pending ({len(pending)}):\n{shown}{extra}"
+            return title, f"{len(items)} item{'s' if len(items) != 1 else ''}"
+    return title, (note.content or "").strip()[:400]
+
+
 
 # ---------------------------------------------------------------------------
 # Reminder dispatch — module-level so background tasks (built-in actions)
@@ -154,6 +180,7 @@ async def dispatch_reminder(
     note_id: str,
     owner: str = "",
     queue_browser: bool = True,
+    settings_override: dict | None = None,
 ) -> dict:
     """Fire a reminder via the configured channel (browser/email/ntfy/webhook).
 
@@ -169,7 +196,7 @@ async def dispatch_reminder(
     nothing is "sent" synchronously for it — the channel just routes there.
     """
     from src.settings import load_settings
-    settings = load_settings()
+    settings = {**load_settings(), **(settings_override or {})}
     channel = settings.get("reminder_channel", "browser")
     llm_on = bool(settings.get("reminder_llm_synthesis", False))
     title = (title or "").strip()
@@ -220,9 +247,9 @@ async def dispatch_reminder(
         try:
             from src.endpoint_resolver import resolve_endpoint
             from src.llm_core import llm_call_async
-            url, model, headers = resolve_endpoint("utility")
+            url, model, headers = resolve_endpoint("utility", owner=owner or None)
             if not url:
-                url, model, headers = resolve_endpoint("default")
+                url, model, headers = resolve_endpoint("default", owner=owner or None)
             if url and model:
                 raw = await llm_call_async(
                     url=url, model=model,
@@ -401,6 +428,76 @@ async def dispatch_reminder(
             email_error = str(e) or e.__class__.__name__
             logger.warning(f"Reminder email send failed: {e}")
 
+    webhook_sent = False
+    webhook_error = ""
+    if channel == "webhook":
+        try:
+            import httpx
+            import json as _wjson
+            from src.integrations import load_integrations
+            # Built-in payload defaults for known presets so users don't have
+            # to configure a template just to use a standard service.
+            _PRESET_TEMPLATE_DEFAULTS = {
+                "discord_webhook": '{"embeds": [{"title": "{{title}}", "description": "{{message}}", "color": 5793266}]}',
+            }
+            intg_id = settings.get("reminder_webhook_integration_id", "").strip()
+            template = settings.get("reminder_webhook_payload_template", "").strip()
+            if not intg_id:
+                webhook_error = "No webhook integration selected"
+            else:
+                intg = next(
+                    (i for i in load_integrations()
+                     if i.get("id") == intg_id and i.get("base_url")),
+                    None,
+                )
+                if not intg:
+                    webhook_error = f"Integration {intg_id!r} not found or missing base URL"
+                else:
+                    # Fall back to a built-in default for known presets so
+                    # users don't have to configure a template for standard
+                    # services like Discord.
+                    if not template:
+                        template = _PRESET_TEMPLATE_DEFAULTS.get(intg.get("preset", ""), "")
+                    if not template:
+                        webhook_error = "No payload template configured"
+                    else:
+                        # Render template: JSON-escape the values so the result
+                        # is always valid JSON regardless of special characters.
+                        # dumps() returns `"value"` — strip outer quotes.
+                        msg = (synthesis or note_body or title or "Reminder")[:4000]
+                        _t = _wjson.dumps(title or "Reminder")[1:-1]
+                        _m = _wjson.dumps(msg)[1:-1]
+                        rendered = template.replace("{{title}}", _t).replace("{{message}}", _m)
+                        hdrs = {"Content-Type": "application/json"}
+                        api_key = intg.get("api_key", "")
+                        auth_type = (intg.get("auth_type") or "none").lower()
+                        if api_key:
+                            if auth_type == "bearer":
+                                hdrs["Authorization"] = f"Bearer {api_key}"
+                            elif auth_type == "header":
+                                hdrs[intg.get("auth_header") or "Authorization"] = api_key
+                        url = intg["base_url"].rstrip("/")
+                        # SSRF guard — matches the pattern used by webhook_routes,
+                        # CalDAV, search, and embeddings. Blocks link-local / metadata
+                        # addresses (169.254.x.x) by default; set
+                        # REMINDER_WEBHOOK_BLOCK_PRIVATE_IPS=true to also block
+                        # RFC-1918 ranges for locked-down deployments.
+                        import os as _os
+                        from src.url_safety import check_outbound_url as _chk
+                        _block = _os.getenv("REMINDER_WEBHOOK_BLOCK_PRIVATE_IPS", "false").lower() == "true"
+                        _ok, _reason = _chk(url, block_private=_block)
+                        if not _ok:
+                            webhook_error = f"Webhook URL rejected: {_reason}"
+                        else:
+                            async with httpx.AsyncClient(timeout=10.0) as client:
+                                resp = await client.post(url, content=rendered.encode(), headers=hdrs)
+                                webhook_sent = resp.is_success
+                                if not webhook_sent:
+                                    webhook_error = f"Webhook returned HTTP {resp.status_code}"
+        except Exception as e:
+            webhook_error = str(e) or e.__class__.__name__
+            logger.warning(f"Reminder webhook send failed: {e}")
+
     ntfy_sent = False
     ntfy_error = ""
     if channel == "ntfy":
@@ -522,6 +619,7 @@ async def dispatch_reminder(
             logger.debug(f"dispatch_reminder: cache write failed: {_e}")
 
     return {
+        "channel": channel,
         "synthesis": synthesis,
         "email_sent": email_sent,
         "email_error": email_error,
@@ -549,6 +647,23 @@ def setup_note_routes(task_scheduler=None):
 
     def _owner(request: Request) -> Optional[str]:
         return get_current_user(request)
+
+    def _is_admin_or_single_user(request: Request, user: str | None) -> bool:
+        if user == "internal-tool":
+            return True
+        if not user:
+            # require_user() already admitted this request, which only happens
+            # for auth-disabled, loopback-bypass, or unconfigured single-user
+            # modes. There is no separate non-admin account boundary there.
+            return True
+        try:
+            from core.auth import AuthManager
+            auth_mgr = getattr(request.app.state, "auth_manager", None) or AuthManager()
+            if not getattr(auth_mgr, "is_configured", True):
+                return True
+            return bool(auth_mgr.is_admin(user))
+        except Exception:
+            return False
 
     # --- LIST ---
     @router.get("")
@@ -767,20 +882,46 @@ def setup_note_routes(task_scheduler=None):
         """
         # Gate against anonymous callers — LLM synthesis can burn tokens.
         from src.auth_helpers import require_user as _ru
-        _ru(request)
+        user = _ru(request)
         body = await request.json()
-        note_id = body.get("note_id")
-        title = (body.get("title") or "").strip()
-        note_body = (body.get("body") or "").strip()
+        note_id = str(body.get("note_id") or "").strip()
         if not note_id:
             raise HTTPException(400, "note_id required")
 
-        # Delegate to the module-level helper so background tasks can reuse
-        # the same dispatch without an HTTP roundtrip + auth cookie.
+        caller = _owner(request)
+        is_test = note_id.startswith("test-")
+        is_admin = _is_admin_or_single_user(request, user or caller)
+        _override: dict = {}
+        if is_test:
+            if not is_admin:
+                raise HTTPException(403, "Admin only")
+            title = (body.get("title") or "Test Reminder").strip() or "Test Reminder"
+            note_body = (body.get("body") or "").strip()
+            # Optional overrides let the admin settings test button pass the
+            # current UI values directly so it never races a pending save.
+            if body.get("channel"):
+                _override["reminder_channel"] = body["channel"]
+            if body.get("webhook_integration_id"):
+                _override["reminder_webhook_integration_id"] = body["webhook_integration_id"]
+            if body.get("webhook_payload_template"):
+                _override["reminder_webhook_payload_template"] = body["webhook_payload_template"]
+        else:
+            db = SessionLocal()
+            try:
+                note = db.query(Note).filter(Note.id == note_id).first()
+                if not note:
+                    raise HTTPException(404, "Note not found")
+                if caller is not None and note.owner != caller:
+                    raise HTTPException(404, "Note not found")
+                title, note_body = _reminder_text_from_note(note)
+            finally:
+                db.close()
+
         return await dispatch_reminder(
             title=title, note_body=note_body, note_id=note_id,
-            owner=_owner(request) or "",
+            owner=caller or "",
             queue_browser=False,
+            settings_override=_override or None,
         )
 
     # --- REORDER NOTES ---

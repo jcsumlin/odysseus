@@ -145,13 +145,13 @@ DEFAULT_SETTINGS = {
     "reminder_llm_synthesis": False,
     "reminder_ntfy_topic": "Reminders",
     "reminder_email_to": "",
-    # Generic outbound webhook channel. The URL may embed a secret (e.g. a
-    # Telegram bot token), so the Settings UI renders it as a sensitive field.
-    # Body is a template with {{title}}/{{message}}/{{note_id}} placeholders.
-    "reminder_webhook_url": "",
-    "reminder_webhook_method": "POST",   # GET | POST | PUT
-    "reminder_webhook_body": '{"title":"{{title}}","message":"{{message}}"}',
-    "reminder_webhook_headers": '{"Content-Type":"application/json"}',
+    # Generic outbound webhook channel: pick any saved Integration as the
+    # target and supply a JSON payload template. Use {{title}} and {{message}}
+    # as placeholders — they are JSON-escaped before substitution, so the
+    # rendered string is always valid JSON. Works with Discord, Slack, Teams,
+    # ntfy (JSON mode), or any service that accepts a POST with a JSON body.
+    "reminder_webhook_integration_id": "",
+    "reminder_webhook_payload_template": "",
     # Email triage scanner rules. Running/paused state and schedule live in
     # Tasks via the built-in `check_email_urgency` task.
     "urgent_email_prompt": (

@@ -12,6 +12,7 @@ from typing import Tuple
 
 from src.auth_helpers import owner_filter
 from core.platform_compat import IS_WINDOWS, find_bash
+from core.constants import internal_api_base
 
 logger = logging.getLogger(__name__)
 
@@ -1902,6 +1903,8 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
                     delivered = bool(dispatch_result.get("email_sent"))
                 elif channel == "ntfy":
                     delivered = bool(dispatch_result.get("ntfy_sent"))
+                elif channel == "webhook":
+                    delivered = bool(dispatch_result.get("webhook_sent"))
                 if delivered:
                     newly_notified.update(new_urgent)
                 else:
@@ -2116,7 +2119,7 @@ async def action_cookbook_serve(
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            r = await client.post("http://localhost:7000/api/model/serve",
+            r = await client.post(f"{internal_api_base()}/api/model/serve",
                                   json=body, headers=headers)
             data = r.json() if r.content else {}
     except Exception as e:
